@@ -61,7 +61,28 @@ def main():
 
     window = sg.Window('Gerenciador de Senhas Local - GUI', layout, finalize=True)
 
-    fernet = None
+    # Use a mutable holder so background thread can modify reference
+    fernet_holder = [None]
+    last_activity = {'ts': time.time()}
+
+    INACTIVITY_TIMEOUT = 300  # seconds to auto-lock (5 minutes)
+    CLIPBOARD_CLEAR_SECONDS = 30  # seconds after copy to clear clipboard
+
+    def touch():
+        last_activity['ts'] = time.time()
+
+    def inactivity_monitor():
+        while True:
+            time.sleep(1)
+            if fernet_holder[0] is not None:
+                if time.time() - last_activity['ts'] > INACTIVITY_TIMEOUT:
+                    try:
+                        window.write_event_value('-AUTO_LOCK-', '')
+                    except Exception:
+                        pass
+
+    t = threading.Thread(target=inactivity_monitor, daemon=True)
+    t.start()
 
     while True:
         event, values = window.read()
@@ -85,8 +106,9 @@ def main():
                 else:
                     keypath = values['-KEYPATH-']
                     key = load_key_from_path(keypath)
-                fernet = Fernet(key)
+                fernet_holder[0] = Fernet(key)
                 sg.popup('Chave carregada com sucesso')
+                touch()
             except Exception as e:
                 sg.popup('Erro ao carregar chave', str(e))
 
@@ -97,8 +119,9 @@ def main():
                 continue
             try:
                 key = Codiguin.create_master_from_password(pwd)
-                fernet = Fernet(key)
+                fernet_holder[0] = Fernet(key)
                 sg.popup('Senha mestra configurada e salt salvo em master.salt')
+                touch()
             except Exception as e:
                 sg.popup('Erro ao configurar senha mestra', str(e))
 
@@ -107,11 +130,12 @@ def main():
                 Codiguin.init_db()
                 window['-LIST-'].update(list_entries())
                 sg.popup('Banco inicializado')
+                touch()
             except Exception as e:
                 sg.popup('Erro ao inicializar DB', str(e))
 
         if event == 'Add':
-            if fernet is None:
+            if fernet_holder[0] is None:
                 sg.popup('Carregue a chave mestra antes de adicionar senhas')
                 continue
             s = values['-SERVICE-'].strip()
@@ -121,21 +145,23 @@ def main():
                 sg.popup('Preencha pelo menos service e password')
                 continue
             try:
-                Codiguin.add_password(s, u, p, fernet)
+                Codiguin.add_password(s, u, p, fernet_holder[0])
                 window['-LIST-'].update(list_entries())
                 sg.popup('Senha adicionada')
+                touch()
             except Exception as e:
                 sg.popup('Erro ao adicionar', str(e))
 
         if event == 'Refresh':
             window['-LIST-'].update(list_entries())
+            touch()
 
         if event == '-LIST-':
             # seleção
             pass
 
         if event == 'Show':
-            if fernet is None:
+            if fernet_holder[0] is None:
                 sg.popup('Carregue a chave mestra antes de visualizar')
                 continue
             sel = values['-LIST-']
@@ -143,10 +169,11 @@ def main():
                 sg.popup('Selecione uma entrada')
                 continue
             service = sel[0].split('  —  ')[0]
-            res = Codiguin.get_password(service, fernet)
+            res = Codiguin.get_password(service, fernet_holder[0])
             if res:
                 username, pwd = res
                 sg.popup(f'Service: {service}\nUsername: {username}\nPassword: {pwd}')
+                touch()
             else:
                 sg.popup('Entrada não encontrada')
 
@@ -156,12 +183,23 @@ def main():
                 sg.popup('Selecione uma entrada')
                 continue
             service = sel[0].split('  —  ')[0]
-            res = Codiguin.get_password(service, fernet)
+            res = Codiguin.get_password(service, fernet_holder[0])
             if res:
                 username, pwd = res
                 try:
                     pyperclip.copy(pwd)
                     sg.popup('Senha copiada para a área de transferência')
+                    touch()
+                    # schedule clipboard clear
+                    def clear_clipboard_later():
+                        time.sleep(CLIPBOARD_CLEAR_SECONDS)
+                        try:
+                            if pyperclip.paste() == pwd:
+                                pyperclip.copy('')
+                        except Exception:
+                            pass
+
+                    threading.Thread(target=clear_clipboard_later, daemon=True).start()
                 except Exception as e:
                     sg.popup('Erro ao copiar', str(e))
             else:
@@ -176,6 +214,16 @@ def main():
             delete_entry(service)
             window['-LIST-'].update(list_entries())
             sg.popup('Entrada removida')
+            touch()
+
+        if event == '-AUTO_LOCK-':
+            # background thread requested auto-lock
+            fernet_holder[0] = None
+            try:
+                pyperclip.copy('')
+            except Exception:
+                pass
+            sg.popup('Aplicação bloqueada por inatividade. Recarregue a chave para continuar.')
 
     window.close()
 
