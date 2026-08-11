@@ -38,8 +38,10 @@ def main():
     sg.theme('SystemDefault')
 
     layout_unlock = [
+        [sg.Text('Método de desbloqueio:'), sg.Radio('Arquivo de chave', 'UNLOCK', default=True, key='-USE_KEYFILE-'), sg.Radio('Senha mestra', 'UNLOCK', key='-USE_PASSWORD-')],
         [sg.Text('Master key:'), sg.Input(KEY_PATH, key='-KEYPATH-'), sg.FileBrowse(file_types=(('Key','*.key'),))],
-        [sg.Button('Load key'), sg.Button('Generate key'), sg.Button('Init DB')],
+        [sg.Text('Master password:'), sg.Input('', key='-MASTER-PWD-', password_char='*')],
+        [sg.Button('Load key'), sg.Button('Set master password'), sg.Button('Generate key'), sg.Button('Init DB')],
         [sg.HorizontalSeparator()],
     ]
 
@@ -73,13 +75,32 @@ def main():
             sg.popup('Chave gerada', f'Chave salva em: {KEY_PATH}')
 
         if event == 'Load key':
-            keypath = values['-KEYPATH-']
             try:
-                key = load_key_from_path(keypath)
+                if values['-USE_PASSWORD-']:
+                    pwd = values['-MASTER-PWD-']
+                    if not pwd:
+                        sg.popup('Digite a senha mestra')
+                        continue
+                    key = Codiguin.load_key_from_password(pwd)
+                else:
+                    keypath = values['-KEYPATH-']
+                    key = load_key_from_path(keypath)
                 fernet = Fernet(key)
                 sg.popup('Chave carregada com sucesso')
             except Exception as e:
                 sg.popup('Erro ao carregar chave', str(e))
+
+        if event == 'Set master password':
+            pwd = values['-MASTER-PWD-']
+            if not pwd:
+                sg.popup('Digite a senha mestra a ser configurada')
+                continue
+            try:
+                key = Codiguin.create_master_from_password(pwd)
+                fernet = Fernet(key)
+                sg.popup('Senha mestra configurada e salt salvo em master.salt')
+            except Exception as e:
+                sg.popup('Erro ao configurar senha mestra', str(e))
 
         if event == 'Init DB':
             try:
